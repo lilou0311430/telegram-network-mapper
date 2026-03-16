@@ -1,0 +1,7 @@
+flask>=3.0
+flask-cors>=4.0
+aiohttp>=3.9
+beautifulsoup4>=4.12
+telethon>=1.36
+lxml>=5.0
+python-dotenv>=1.0

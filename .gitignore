@@ -1,0 +1,23 @@
+# Credentials & secrets
+config.py
+.env
+
+# Telegram session files
+*.session
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Scraper cache
+.cache/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
