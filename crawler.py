@@ -158,7 +158,7 @@ class NetworkGraph:
             lines.append(f'      <node id={safe_id} label={label}>')
             lines.append(f'        <attvalues>')
             lines.append(f'          <attvalue for="0" value={label}/>')
-            lines.append(f'          <attvalue for="1" value="{info.subscribers}"/>')
+            lines.append(f'          <attvalue for="1" value="{int(info.subscribers or 0)}"/>')
             lines.append(f'          <attvalue for="2" value={desc}/>')
             lines.append(f'          <attvalue for="3" value="{str(info.is_verified).lower()}"/>')
             lines.append(f'          <attvalue for="4" value="{str(info.scraped_at is not None).lower()}"/>')
@@ -207,7 +207,7 @@ class NetworkGraph:
             desc = escape((info.description or '')[:200])
             lines.append(f'    <node id={safe_id}>')
             lines.append(f'      <data key="title">{title}</data>')
-            lines.append(f'      <data key="subscribers">{info.subscribers}</data>')
+            lines.append(f'      <data key="subscribers">{int(info.subscribers or 0)}</data>')
             lines.append(f'      <data key="description">{desc}</data>')
             lines.append(f'    </node>')
 
