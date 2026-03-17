@@ -172,7 +172,7 @@ class NetworkGraph:
             types = escape(','.join(set(link.link_types)))
             src = quoteattr(link.source)
             tgt = quoteattr(link.target)
-            lines.append(f'      <edge id="{i}" source={src} target={tgt} weight="{link.count}">')
+            lines.append(f'      <edge id="{i}" source={src} target={tgt}>')
             lines.append(f'        <attvalues>')
             lines.append(f'          <attvalue for="0" value="{link.count}"/>')
             lines.append(f'          <attvalue for="1" value="{types}"/>')
