@@ -115,6 +115,14 @@ class ChannelLink:
         }
 
 
+def _is_valid_username(username: str) -> bool:
+    """Check if a username looks like a real Telegram channel."""
+    return (username not in IGNORE_LIST
+            and 4 <= len(username) <= 32
+            and not username.isdigit()
+            and not any(username.endswith(s) for s in _BOT_SUFFIXES))
+
+
 def extract_channel_references(text: str) -> list[tuple[str, str]]:
     """Extract channel usernames from text. Returns list of (username, link_type)."""
     refs = []
@@ -122,14 +130,30 @@ def extract_channel_references(text: str) -> list[tuple[str, str]]:
     for pattern in TG_LINK_PATTERNS:
         for match in pattern.finditer(text):
             username = match.group(1).lower().rstrip('_')
-            if (username not in IGNORE_LIST
-                    and len(username) >= 4
-                    and len(username) <= 32
-                    and not username.isdigit()
-                    and not any(username.endswith(s) for s in _BOT_SUFFIXES)
-                    and username not in seen):
+            if _is_valid_username(username) and username not in seen:
                 link_type = 'mention' if match.group(0).startswith('@') else 'link'
                 refs.append((username, link_type))
+                seen.add(username)
+    return refs
+
+
+# Patterns for URL-based links only (no @mentions) — safe to use on raw HTML
+_TG_URL_PATTERNS = [
+    re.compile(r'https?://t\.me/(?:s/)?([a-zA-Z_][\w]{3,30})(?:/(\d+))?'),
+    re.compile(r'https?://telegram\.me/([a-zA-Z_][\w]{3,30})(?:/(\d+))?'),
+    re.compile(r'tg://resolve\?domain=([a-zA-Z_][\w]{3,30})'),
+]
+
+
+def extract_link_references(html: str) -> list[tuple[str, str]]:
+    """Extract only URL-based channel references from HTML (no @mentions)."""
+    refs = []
+    seen = set()
+    for pattern in _TG_URL_PATTERNS:
+        for match in pattern.finditer(html):
+            username = match.group(1).lower().rstrip('_')
+            if _is_valid_username(username) and username not in seen:
+                refs.append((username, 'link'))
                 seen.add(username)
     return refs
 
@@ -628,8 +652,12 @@ class WebScraper:
                         if not link_map[fwd].last_seen or date > link_map[fwd].last_seen:
                             link_map[fwd].last_seen = date
 
-            combined_text = msg.get('text', '') + ' ' + msg.get('html', '')
-            refs = extract_channel_references(combined_text)
+            # Extract from plain text (mentions + links) and HTML (links only)
+            text_part = msg.get('text', '')
+            html_part = msg.get('html', '')
+            refs = extract_channel_references(text_part)
+            if html_part:
+                refs.extend(extract_link_references(html_part))
             for ref_username, link_type in refs:
                 if ref_username != username:
                     pair = (msg_id, ref_username)
