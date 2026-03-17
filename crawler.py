@@ -107,6 +107,7 @@ class NetworkGraph:
                     "description": info.description[:200] if info.description else "",
                     "photo_url": info.photo_url,
                     "is_verified": info.is_verified,
+                    "peer_id": info.peer_id,
                     "scraped": info.scraped_at is not None,
                 })
 
@@ -143,6 +144,7 @@ class NetworkGraph:
             '      <attribute id="2" title="description" type="string"/>',
             '      <attribute id="3" title="is_verified" type="boolean"/>',
             '      <attribute id="4" title="scraped" type="boolean"/>',
+            '      <attribute id="5" title="peer_id" type="long"/>',
             '    </attributes>',
             '    <attributes class="edge" mode="static">',
             '      <attribute id="0" title="weight" type="integer"/>',
@@ -162,6 +164,7 @@ class NetworkGraph:
             lines.append(f'          <attvalue for="2" value={desc}/>')
             lines.append(f'          <attvalue for="3" value="{str(info.is_verified).lower()}"/>')
             lines.append(f'          <attvalue for="4" value="{str(info.scraped_at is not None).lower()}"/>')
+            lines.append(f'          <attvalue for="5" value="{info.peer_id}"/>')
             lines.append(f'        </attvalues>')
             lines.append(f'      </node>')
 
@@ -196,6 +199,7 @@ class NetworkGraph:
             '  <key id="title" for="node" attr.name="title" attr.type="string"/>',
             '  <key id="subscribers" for="node" attr.name="subscribers" attr.type="int"/>',
             '  <key id="description" for="node" attr.name="description" attr.type="string"/>',
+            '  <key id="peer_id" for="node" attr.name="peer_id" attr.type="long"/>',
             '  <key id="weight" for="edge" attr.name="weight" attr.type="int"/>',
             '  <key id="link_types" for="edge" attr.name="link_types" attr.type="string"/>',
             '  <graph id="telegram_network" edgedefault="directed">',
@@ -209,6 +213,7 @@ class NetworkGraph:
             lines.append(f'      <data key="title">{title}</data>')
             lines.append(f'      <data key="subscribers">{int(info.subscribers or 0)}</data>')
             lines.append(f'      <data key="description">{desc}</data>')
+            lines.append(f'      <data key="peer_id">{info.peer_id}</data>')
             lines.append(f'    </node>')
 
         for key, link in self.edges.items():

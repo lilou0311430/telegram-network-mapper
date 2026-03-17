@@ -79,6 +79,7 @@ class ChannelInfo:
     subscribers: int = 0
     photo_url: str = ""
     is_verified: bool = False
+    peer_id: int = 0
     scraped_at: Optional[str] = None
 
     def to_dict(self):
@@ -89,6 +90,7 @@ class ChannelInfo:
             "subscribers": self.subscribers,
             "photo_url": self.photo_url,
             "is_verified": self.is_verified,
+            "peer_id": self.peer_id,
             "scraped_at": self.scraped_at,
         }
 
@@ -768,6 +770,7 @@ class TelethonScraper:
                 description=getattr(full.full_chat, 'about', '') or '',
                 subscribers=getattr(full.full_chat, 'participants_count', 0) or 0,
                 is_verified=getattr(entity, 'verified', False),
+                peer_id=getattr(entity, 'id', 0) or 0,
                 scraped_at=datetime.utcnow().isoformat(),
             )
         except Exception as e:
