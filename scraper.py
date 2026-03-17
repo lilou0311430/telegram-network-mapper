@@ -47,8 +47,11 @@ TG_LINK_PATTERNS = [
     re.compile(r'https?://t\.me/(?:s/)?([a-zA-Z_][\w]{3,30})(?:/(\d+))?'),
     re.compile(r'https?://telegram\.me/([a-zA-Z_][\w]{3,30})(?:/(\d+))?'),
     re.compile(r'tg://resolve\?domain=([a-zA-Z_][\w]{3,30})'),
-    re.compile(r'@([a-zA-Z_][\w]{3,30})'),
+    re.compile(r'(?<!\w)@([a-zA-Z_][\w]{3,30})(?!\w)'),
 ]
+
+# Suffixes that indicate bots or group chats, not channels
+_BOT_SUFFIXES = ('_bot', 'bot', '_chat', '_group', '_support', '_help')
 
 # Pattern to detect (and skip) invite links
 TG_INVITE_PATTERN = re.compile(r'https?://t\.me/\+[\w-]+')
@@ -118,11 +121,12 @@ def extract_channel_references(text: str) -> list[tuple[str, str]]:
     seen = set()
     for pattern in TG_LINK_PATTERNS:
         for match in pattern.finditer(text):
-            username = match.group(1).lower()
+            username = match.group(1).lower().rstrip('_')
             if (username not in IGNORE_LIST
                     and len(username) >= 4
                     and len(username) <= 32
                     and not username.isdigit()
+                    and not any(username.endswith(s) for s in _BOT_SUFFIXES)
                     and username not in seen):
                 link_type = 'mention' if match.group(0).startswith('@') else 'link'
                 refs.append((username, link_type))
@@ -441,7 +445,11 @@ class WebScraper:
         if html_info:
             soup = BeautifulSoup(html_info, HTML_PARSER)
 
-            if soup.select_one('.tgme_page_icon_not_found') or 'not found' in html_info.lower()[:500]:
+            html_lower = html_info.lower()[:1000]
+            if (soup.select_one('.tgme_page_icon_not_found')
+                    or 'not found' in html_lower
+                    or 'a new era of messaging' in html_lower
+                    or 'telegram: contact @' in html_lower):
                 logger.warning(f"Channel {username} not found")
                 return None
 
