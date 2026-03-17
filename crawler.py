@@ -19,6 +19,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Callable
+from xml.sax.saxutils import escape, quoteattr
 
 from scraper import WebScraper, TelethonScraper, ChannelInfo, ChannelLink
 
@@ -151,13 +152,14 @@ class NetworkGraph:
         ]
 
         for username, info in self.nodes.items():
-            label = (info.title or username).replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;')
-            desc = (info.description or '').replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;')[:200]
-            lines.append(f'      <node id="{username}" label="{label}">')
+            safe_id = quoteattr(username)
+            label = quoteattr(info.title or username)
+            desc = quoteattr((info.description or '')[:200])
+            lines.append(f'      <node id={safe_id} label={label}>')
             lines.append(f'        <attvalues>')
-            lines.append(f'          <attvalue for="0" value="{label}"/>')
+            lines.append(f'          <attvalue for="0" value={label}/>')
             lines.append(f'          <attvalue for="1" value="{info.subscribers}"/>')
-            lines.append(f'          <attvalue for="2" value="{desc}"/>')
+            lines.append(f'          <attvalue for="2" value={desc}/>')
             lines.append(f'          <attvalue for="3" value="{str(info.is_verified).lower()}"/>')
             lines.append(f'          <attvalue for="4" value="{str(info.scraped_at is not None).lower()}"/>')
             lines.append(f'        </attvalues>')
@@ -167,8 +169,10 @@ class NetworkGraph:
         lines.append('    <edges>')
 
         for i, (key, link) in enumerate(self.edges.items()):
-            types = ','.join(set(link.link_types))
-            lines.append(f'      <edge id="{i}" source="{link.source}" target="{link.target}" weight="{link.count}">')
+            types = escape(','.join(set(link.link_types)))
+            src = quoteattr(link.source)
+            tgt = quoteattr(link.target)
+            lines.append(f'      <edge id="{i}" source={src} target={tgt} weight="{link.count}">')
             lines.append(f'        <attvalues>')
             lines.append(f'          <attvalue for="0" value="{link.count}"/>')
             lines.append(f'          <attvalue for="1" value="{types}"/>')
@@ -198,17 +202,20 @@ class NetworkGraph:
         ]
 
         for username, info in self.nodes.items():
-            title = (info.title or username).replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;')
-            desc = (info.description or '').replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;')[:200]
-            lines.append(f'    <node id="{username}">')
+            safe_id = quoteattr(username)
+            title = escape(info.title or username)
+            desc = escape((info.description or '')[:200])
+            lines.append(f'    <node id={safe_id}>')
             lines.append(f'      <data key="title">{title}</data>')
             lines.append(f'      <data key="subscribers">{info.subscribers}</data>')
             lines.append(f'      <data key="description">{desc}</data>')
             lines.append(f'    </node>')
 
         for key, link in self.edges.items():
-            types = ','.join(set(link.link_types))
-            lines.append(f'    <edge source="{link.source}" target="{link.target}">')
+            types = escape(','.join(set(link.link_types)))
+            src = quoteattr(link.source)
+            tgt = quoteattr(link.target)
+            lines.append(f'    <edge source={src} target={tgt}>')
             lines.append(f'      <data key="weight">{link.count}</data>')
             lines.append(f'      <data key="link_types">{types}</data>')
             lines.append(f'    </edge>')
