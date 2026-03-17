@@ -473,6 +473,12 @@
             cursor: pointer;
         }
 
+        /* Disabled optional fields */
+        .field-disabled {
+            opacity: 0.35;
+            pointer-events: none;
+        }
+
         /* Telethon config */
         .telethon-config {
             display: none;
@@ -533,8 +539,11 @@
                         <input type="number" id="max-depth" value="2" min="0" max="10">
                     </div>
                     <div>
-                        <label>Max chaines <span class="help-tip">?<span class="help-text">Nombre maximum de chaines a scraper au total. 0 = illimite (attention au temps de crawl). Limite le crawl pour eviter qu'il tourne trop longtemps.</span></span></label>
-                        <input type="number" id="max-channels" value="50" min="0" max="10000">
+                        <label>
+                            <input type="checkbox" id="toggle-max-channels" checked onchange="toggleOptionalField('max-channels', this.checked)">
+                            Max chaines <span class="help-tip">?<span class="help-text">Limite le nombre total de chaines a scraper. Decocher = illimite (attention au temps de crawl).</span></span>
+                        </label>
+                        <input type="number" id="max-channels" value="50" min="1" max="10000">
                     </div>
                 </div>
 
@@ -564,12 +573,18 @@
 
                 <div class="row">
                     <div>
-                        <label>Periode (jours) <span class="help-tip">?<span class="help-text">N'analyser que les messages des X derniers jours. 0 = pas de filtre, tous les messages sont analyses.</span></span></label>
-                        <input type="number" id="max-age-days" value="0" min="0" max="3650">
+                        <label>
+                            <input type="checkbox" id="toggle-max-age" onchange="toggleOptionalField('max-age-days', this.checked)">
+                            Periode (jours) <span class="help-tip">?<span class="help-text">N'analyser que les messages des X derniers jours. Decocher = pas de filtre, tous les messages sont analyses.</span></span>
+                        </label>
+                        <input type="number" id="max-age-days" value="30" min="1" max="3650" disabled class="field-disabled">
                     </div>
                     <div>
-                        <label>Abonnes min <span class="help-tip">?<span class="help-text">Ignorer les chaines avec moins de N abonnes. Utile pour filtrer les micro-chaines sans interet. 0 = pas de filtre. Les seeds sont toujours analyses.</span></span></label>
-                        <input type="number" id="min-subscribers" value="0" min="0">
+                        <label>
+                            <input type="checkbox" id="toggle-min-subs" onchange="toggleOptionalField('min-subscribers', this.checked)">
+                            Abonnes min <span class="help-tip">?<span class="help-text">Ignorer les chaines avec moins de N abonnes. Decocher = pas de filtre. Les seeds sont toujours analyses.</span></span>
+                        </label>
+                        <input type="number" id="min-subscribers" value="100" min="1" disabled class="field-disabled">
                     </div>
                 </div>
 
@@ -942,6 +957,12 @@
             .text(d => showLabels ? (d.title || d.id).substring(0, 20) : '');
     }
 
+    function toggleOptionalField(fieldId, enabled) {
+        const field = document.getElementById(fieldId);
+        field.disabled = !enabled;
+        field.classList.toggle('field-disabled', !enabled);
+    }
+
     function toggleTelethon() {
         const method = document.getElementById('method').value;
         document.getElementById('telethon-config').classList.toggle('visible', method === 'telethon');
@@ -975,13 +996,16 @@
         const body = {
             seeds: seeds,
             max_depth: parseInt(document.getElementById('max-depth').value),
-            max_channels: parseInt(document.getElementById('max-channels').value),
+            max_channels: document.getElementById('toggle-max-channels').checked
+                ? parseInt(document.getElementById('max-channels').value) : 0,
             max_messages: parseInt(document.getElementById('max-messages').value),
             delay: parseFloat(document.getElementById('delay').value),
             concurrency: parseInt(document.getElementById('concurrency').value),
             method: document.getElementById('method').value,
-            max_age_days: parseInt(document.getElementById('max-age-days').value) || 0,
-            min_subscribers: parseInt(document.getElementById('min-subscribers').value) || 0,
+            max_age_days: document.getElementById('toggle-max-age').checked
+                ? parseInt(document.getElementById('max-age-days').value) : 0,
+            min_subscribers: document.getElementById('toggle-min-subs').checked
+                ? parseInt(document.getElementById('min-subscribers').value) : 0,
             blacklist: blacklist,
             link_types: linkTypes,
         };
