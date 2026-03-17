@@ -251,9 +251,13 @@ class Crawler:
 
     def __init__(self, method: str = "web", max_messages: int = 100, delay: float = 0.8,
                  concurrency: int = 5, api_id: int = None, api_hash: str = None,
-                 phone: str = None, proxies: list = None):
+                 phone: str = None, proxies: list = None,
+                 max_age_days: int = 0, link_types: list = None,
+                 min_subscribers: int = 0, blacklist: list = None):
         self.method = method
         self.concurrency = concurrency
+        self.min_subscribers = min_subscribers
+        self.blacklist = set(blacklist or [])
         self.graph = NetworkGraph()
         self.state = CrawlState()
         self._stop_requested = False
@@ -264,6 +268,7 @@ class Crawler:
             self.scraper = TelethonScraper(
                 api_id=api_id, api_hash=api_hash, phone=phone,
                 max_messages=max_messages, delay=delay,
+                max_age_days=max_age_days, link_types=link_types,
             )
         else:
             self.scraper = WebScraper(
@@ -271,6 +276,7 @@ class Crawler:
                 delay=delay,
                 concurrency=concurrency,
                 proxies=proxies,
+                max_age_days=max_age_days, link_types=link_types,
             )
 
     def on_update(self, callback: Callable):
@@ -362,19 +368,21 @@ class Crawler:
             if not channels_at_depth:
                 continue
 
-            # Filter already visited
-            channels_at_depth = [c for c in channels_at_depth if c not in visited]
+            # Filter already visited and blacklisted
+            channels_at_depth = [c for c in channels_at_depth
+                                 if c not in visited and c not in self.blacklist]
             if not channels_at_depth:
                 continue
 
             # Sort by priority (popular channels first)
             channels_at_depth = self._sort_by_priority(channels_at_depth)
 
-            # Limit to max_channels
-            remaining = max_channels - self.state.channels_scraped
-            if remaining <= 0:
-                break
-            channels_at_depth = channels_at_depth[:remaining]
+            # Limit to max_channels (0 = unlimited)
+            if max_channels > 0:
+                remaining = max_channels - self.state.channels_scraped
+                if remaining <= 0:
+                    break
+                channels_at_depth = channels_at_depth[:remaining]
 
             self.state.current_depth = depth
             depth_start = time.time()
@@ -410,12 +418,23 @@ class Crawler:
                             continue
 
                         username, info, links = result
+
+                        # Skip channels below min_subscribers (except seeds at depth 0)
+                        if (self.min_subscribers > 0 and info and depth > 0
+                                and info.subscribers < self.min_subscribers):
+                            logger.info(f"[{username}] skipped: {info.subscribers} subscribers < {self.min_subscribers} min")
+                            self.state.channels_scraped += 1
+                            continue
+
                         if info:
                             self.graph.add_node(info)
                         else:
                             self.graph.add_placeholder_node(username)
 
                         for link in links:
+                            # Don't queue blacklisted targets
+                            if link.target in self.blacklist:
+                                continue
                             self.graph.add_placeholder_node(link.target)
                             self.graph.add_edge(link)
 
@@ -449,12 +468,21 @@ class Crawler:
 
                     username, info, links = await self._scrape_one(username)
 
+                    # Skip channels below min_subscribers (except seeds at depth 0)
+                    if (self.min_subscribers > 0 and info and depth > 0
+                            and info.subscribers < self.min_subscribers):
+                        logger.info(f"[{username}] skipped: {info.subscribers} subscribers < {self.min_subscribers} min")
+                        self.state.channels_scraped += 1
+                        continue
+
                     if info:
                         self.graph.add_node(info)
                     else:
                         self.graph.add_placeholder_node(username)
 
                     for link in links:
+                        if link.target in self.blacklist:
+                            continue
                         self.graph.add_placeholder_node(link.target)
                         self.graph.add_edge(link)
 

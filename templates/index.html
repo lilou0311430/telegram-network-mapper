@@ -466,6 +466,13 @@
             display: block;
         }
 
+        /* Checkbox styling */
+        input[type="checkbox"] {
+            width: auto;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+
         /* Telethon config */
         .telethon-config {
             display: none;
@@ -526,15 +533,15 @@
                         <input type="number" id="max-depth" value="2" min="0" max="10">
                     </div>
                     <div>
-                        <label>Max chaines <span class="help-tip">?<span class="help-text">Nombre maximum de chaines a scraper au total. Limite le crawl pour eviter qu'il tourne trop longtemps.</span></span></label>
-                        <input type="number" id="max-channels" value="50" min="1" max="500">
+                        <label>Max chaines <span class="help-tip">?<span class="help-text">Nombre maximum de chaines a scraper au total. 0 = illimite (attention au temps de crawl). Limite le crawl pour eviter qu'il tourne trop longtemps.</span></span></label>
+                        <input type="number" id="max-channels" value="50" min="0" max="10000">
                     </div>
                 </div>
 
                 <div class="row">
                     <div>
                         <label>Messages/chaine <span class="help-tip">?<span class="help-text">Nombre de messages recents a analyser par chaine. Plus il y en a, plus on trouve de liens, mais le scraping est plus lent.</span></span></label>
-                        <input type="number" id="max-messages" value="100" min="10" max="1000">
+                        <input type="number" id="max-messages" value="100" min="10" max="5000">
                     </div>
                     <div>
                         <label>Delai (sec) <span class="help-tip">?<span class="help-text">Temps d'attente entre chaque requete. Un delai plus long evite de se faire bloquer par Telegram, mais ralentit le crawl.</span></span></label>
@@ -553,6 +560,36 @@
                             Plus = plus rapide mais risque de blocage
                         </div>
                     </div>
+                </div>
+
+                <div class="row">
+                    <div>
+                        <label>Periode (jours) <span class="help-tip">?<span class="help-text">N'analyser que les messages des X derniers jours. 0 = pas de filtre, tous les messages sont analyses.</span></span></label>
+                        <input type="number" id="max-age-days" value="0" min="0" max="3650">
+                    </div>
+                    <div>
+                        <label>Abonnes min <span class="help-tip">?<span class="help-text">Ignorer les chaines avec moins de N abonnes. Utile pour filtrer les micro-chaines sans interet. 0 = pas de filtre. Les seeds sont toujours analyses.</span></span></label>
+                        <input type="number" id="min-subscribers" value="0" min="0">
+                    </div>
+                </div>
+
+                <label>Canaux a ignorer <span class="help-tip">?<span class="help-text">Liste de @usernames a ne jamais explorer, un par ligne. Utile pour exclure des canaux spam, bots, ou hors-sujet.</span></span></label>
+                <textarea id="blacklist" placeholder="@spam_channel&#10;@bot_channel" style="min-height: 45px;"></textarea>
+
+                <label>Types de liens <span class="help-tip">?<span class="help-text">Choisir quels types de liens detecter. Decocher un type pour l'ignorer dans l'analyse.</span></span></label>
+                <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; font-size: 12px;">
+                    <label style="display: flex; align-items: center; gap: 4px; margin: 0; cursor: pointer;">
+                        <input type="checkbox" id="lt-forward" checked> Forwards
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 4px; margin: 0; cursor: pointer;">
+                        <input type="checkbox" id="lt-mention" checked> Mentions
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 4px; margin: 0; cursor: pointer;">
+                        <input type="checkbox" id="lt-link" checked> Liens t.me
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 4px; margin: 0; cursor: pointer;">
+                        <input type="checkbox" id="lt-description" checked> Description
+                    </label>
                 </div>
 
                 <label>Methode <span class="help-tip">?<span class="help-text">Web scraping : pas besoin de compte, mais limite aux chaines publiques. Telethon API : necessite un compte Telegram, mais plus complet et fiable.</span></span></label>
@@ -922,6 +959,19 @@
             return;
         }
 
+        // Collect link types
+        const linkTypes = [];
+        if (document.getElementById('lt-forward').checked) linkTypes.push('forward');
+        if (document.getElementById('lt-mention').checked) linkTypes.push('mention');
+        if (document.getElementById('lt-link').checked) linkTypes.push('link');
+        if (document.getElementById('lt-description').checked) linkTypes.push('description');
+
+        // Collect blacklist
+        const blacklist = document.getElementById('blacklist').value
+            .split('\n')
+            .map(s => s.trim())
+            .filter(s => s.length > 0);
+
         const body = {
             seeds: seeds,
             max_depth: parseInt(document.getElementById('max-depth').value),
@@ -930,6 +980,10 @@
             delay: parseFloat(document.getElementById('delay').value),
             concurrency: parseInt(document.getElementById('concurrency').value),
             method: document.getElementById('method').value,
+            max_age_days: parseInt(document.getElementById('max-age-days').value) || 0,
+            min_subscribers: parseInt(document.getElementById('min-subscribers').value) || 0,
+            blacklist: blacklist,
+            link_types: linkTypes,
         };
 
         if (body.method === 'telethon') {

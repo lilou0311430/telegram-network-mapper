@@ -238,10 +238,11 @@ class WebScraper:
 
     def __init__(self, max_messages: int = 100, delay: float = 0.8,
                  concurrency: int = 5, use_cache: bool = True, cache_ttl: int = 3600,
-                 max_retries: int = 3, proxies: list = None):
+                 max_retries: int = 3, proxies: list = None,
+                 max_age_days: int = 0, link_types: list = None):
         # Validation
-        if max_messages < 1 or max_messages > 1000:
-            raise ValueError("max_messages must be between 1 and 1000")
+        if max_messages < 1 or max_messages > 5000:
+            raise ValueError("max_messages must be between 1 and 5000")
         if delay < 0:
             raise ValueError("delay must be non-negative")
         if concurrency < 1 or concurrency > 20:
@@ -252,6 +253,8 @@ class WebScraper:
         self.current_delay = delay
         self.concurrency = concurrency
         self.max_retries = max_retries
+        self.max_age_days = max_age_days
+        self.link_types = link_types or ['forward', 'mention', 'link', 'description']
         self.session: Optional[aiohttp.ClientSession] = None
         self.cache = PageCache(ttl=cache_ttl) if use_cache else None
         # Adaptive delay tracking
@@ -515,6 +518,12 @@ class WebScraper:
         if not msg_elements:
             return messages
 
+        # Calculate date cutoff for filtering
+        date_cutoff = None
+        if self.max_age_days > 0:
+            from datetime import timedelta, timezone
+            date_cutoff = datetime.now(timezone.utc) - timedelta(days=self.max_age_days)
+
         for msg_el in msg_elements[-self.max_messages:]:
             msg_data = {}
 
@@ -552,6 +561,18 @@ class WebScraper:
             date_el = msg_el.select_one('time[datetime]')
             if date_el and date_el.get('datetime'):
                 msg_data['date'] = date_el['datetime']
+
+                # Filter by date if max_age_days is set
+                if date_cutoff:
+                    try:
+                        from datetime import timezone
+                        msg_date = datetime.fromisoformat(date_el['datetime'].replace('Z', '+00:00'))
+                        if msg_date.tzinfo is None:
+                            msg_date = msg_date.replace(tzinfo=timezone.utc)
+                        if msg_date < date_cutoff:
+                            continue  # Skip old message
+                    except (ValueError, TypeError):
+                        pass  # Keep message if date can't be parsed
 
             views_el = msg_el.select_one('.tgme_widget_message_views')
             if views_el:
@@ -625,13 +646,22 @@ class WebScraper:
                         link_map[ref_username] = ChannelLink(source=username, target=ref_username)
                     link_map[ref_username].link_types.append('description')
 
+        # Filter by allowed link types
+        filtered_links = {}
+        for target, link in link_map.items():
+            # Keep only link_types that are in the allowed set
+            allowed_types = [t for t in link.link_types if t in self.link_types]
+            if allowed_types:
+                link.link_types = allowed_types
+                filtered_links[target] = link
+
         elapsed = time.time() - start_time
-        logger.info(f"[{username}] scraped in {elapsed:.1f}s — {len(link_map)} links found")
+        logger.info(f"[{username}] scraped in {elapsed:.1f}s — {len(filtered_links)} links found (filtered from {len(link_map)})")
 
         # Adaptive delay
         await asyncio.sleep(self.current_delay)
 
-        return info, list(link_map.values())
+        return info, list(filtered_links.values())
 
 
 # ────────────────────────────────────────────────────────────
@@ -642,7 +672,8 @@ class TelethonScraper:
 
     def __init__(self, api_id: int, api_hash: str, phone: str = None,
                  max_messages: int = 200, delay: float = 0.5, concurrency: int = 1,
-                 use_cache: bool = True, cache_ttl: int = 3600):
+                 use_cache: bool = True, cache_ttl: int = 3600,
+                 max_age_days: int = 0, link_types: list = None):
         if not api_id or api_id <= 0:
             raise ValueError("api_id must be a positive integer")
         if not api_hash:
@@ -653,6 +684,8 @@ class TelethonScraper:
         self.phone = phone
         self.max_messages = max_messages
         self.delay = delay
+        self.max_age_days = max_age_days
+        self.link_types = link_types or ['forward', 'mention', 'link', 'description']
         self.client = None
         # Entity cache (avoids repeated get_entity calls)
         self._entity_cache: dict = {}
@@ -713,10 +746,25 @@ class TelethonScraper:
         link_map: dict[str, ChannelLink] = {}
         seen_msg_refs: set[tuple] = set()  # Deduplication
 
+        # Calculate date cutoff for filtering
+        date_cutoff = None
+        if self.max_age_days > 0:
+            from datetime import timedelta, timezone
+            date_cutoff = datetime.now(timezone.utc) - timedelta(days=self.max_age_days)
+
         try:
             entity = await self._get_entity(username)
             async for message in self.client.iter_messages(entity, limit=self.max_messages):
                 try:
+                    # Filter by date — Telethon messages are newest-first, so break on old
+                    if date_cutoff and message.date:
+                        msg_date = message.date
+                        if msg_date.tzinfo is None:
+                            from datetime import timezone
+                            msg_date = msg_date.replace(tzinfo=timezone.utc)
+                        if msg_date < date_cutoff:
+                            break  # All remaining messages are older
+
                     # Check forwarded messages
                     if message.forward:
                         fwd_username = None
@@ -790,8 +838,16 @@ class TelethonScraper:
                         link_map[ref_username] = ChannelLink(source=username, target=ref_username)
                     link_map[ref_username].link_types.append('description')
 
+        # Filter by allowed link types
+        filtered_links = {}
+        for target, link in link_map.items():
+            allowed_types = [t for t in link.link_types if t in self.link_types]
+            if allowed_types:
+                link.link_types = allowed_types
+                filtered_links[target] = link
+
         elapsed = time.time() - start_time
-        logger.info(f"[{username}] Telethon scraped in {elapsed:.1f}s — {len(link_map)} links found")
+        logger.info(f"[{username}] Telethon scraped in {elapsed:.1f}s — {len(filtered_links)} links found (filtered from {len(link_map)})")
 
         await asyncio.sleep(self.delay)
-        return info, list(link_map.values())
+        return info, list(filtered_links.values())

@@ -103,12 +103,30 @@ def start_crawl():
         return jsonify({"error": "No seed channels provided"}), 400
 
     # Validate and clamp parameters
-    max_depth = max(1, min(5, int(data.get('max_depth', 2))))
-    max_channels = max(1, min(500, int(data.get('max_channels', 50))))
-    max_messages = max(1, min(1000, int(data.get('max_messages', 100))))
+    max_depth = max(1, min(10, int(data.get('max_depth', 2))))
+    raw_max_channels = int(data.get('max_channels', 50))
+    max_channels = 0 if raw_max_channels == 0 else max(1, min(10000, raw_max_channels))  # 0 = unlimited
+    max_messages = max(1, min(5000, int(data.get('max_messages', 100))))
     delay = max(0.0, min(10.0, float(data.get('delay', 1.5))))
     concurrency = max(1, min(20, int(data.get('concurrency', 5))))
     method = data.get('method', 'web')
+
+    # New filtering options
+    max_age_days = max(0, int(data.get('max_age_days', 0)))  # 0 = no filter
+    min_subscribers = max(0, int(data.get('min_subscribers', 0)))  # 0 = no filter
+
+    # Blacklist
+    raw_blacklist = data.get('blacklist', [])
+    blacklist = []
+    for b in raw_blacklist:
+        b = b.strip().lstrip('@').lower()
+        if 't.me/' in b:
+            b = b.split('t.me/')[-1].split('/')[0]
+        if b:
+            blacklist.append(b)
+
+    # Link types filter
+    link_types = data.get('link_types', ['forward', 'mention', 'link', 'description'])
 
     if method not in ('web', 'telethon'):
         return jsonify({"error": "method must be 'web' or 'telethon'"}), 400
@@ -135,6 +153,10 @@ def start_crawl():
         "delay": delay,
         "concurrency": concurrency,
         "proxies": proxies,
+        "max_age_days": max_age_days,
+        "link_types": link_types,
+        "min_subscribers": min_subscribers,
+        "blacklist": blacklist,
     }
 
     if method == "telethon":
