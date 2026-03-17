@@ -21,7 +21,7 @@ from datetime import datetime
 from typing import Optional, Callable
 from xml.sax.saxutils import escape, quoteattr
 
-from scraper import WebScraper, TelethonScraper, ChannelInfo, ChannelLink
+from scraper import WebScraper, TelethonScraper, ChannelInfo, ChannelLink, FloodWaitTooLong
 
 logger = logging.getLogger(__name__)
 
@@ -322,6 +322,8 @@ class Crawler:
         try:
             info, links = await self.scraper.find_linked_channels(username)
             return username, info, links
+        except FloodWaitTooLong:
+            raise  # Let crawler handle fallback
         except Exception as e:
             logger.error(f"Error scraping {username}: {e}")
             return username, None, []
@@ -468,6 +470,7 @@ class Crawler:
 
             else:
                 # SEQUENTIAL for Telethon (API rate limits)
+                fallback_to_web = False
                 for username in channels_at_depth:
                     if self._stop_requested:
                         break
@@ -478,7 +481,30 @@ class Crawler:
                     self.state.current_channel = username
                     self._notify()
 
-                    username, info, links = await self._scrape_one(username)
+                    try:
+                        username, info, links = await self._scrape_one(username)
+                    except FloodWaitTooLong as e:
+                        wait_msg = f"Rate-limit Telegram: attente de {e.seconds}s requise (~{e.seconds // 3600}h{(e.seconds % 3600) // 60}m). Basculement en mode Web."
+                        logger.warning(wait_msg)
+                        self.state.errors.append(wait_msg)
+                        self._notify()
+
+                        # Close Telethon and switch to Web scraper
+                        if hasattr(self.scraper, 'close'):
+                            await self.scraper.close()
+                        self.scraper = WebScraper(
+                            max_messages=self.scraper.max_messages,
+                            delay=self.scraper.delay,
+                            link_types=self.scraper.link_types,
+                            max_age_days=getattr(self.scraper, 'max_age_days', 0),
+                        )
+                        self.method = "web"
+                        fallback_to_web = True
+
+                        # Remove current channel from visited so it gets re-scraped via Web
+                        visited.discard(username)
+                        logger.info("Basculement automatique en mode Web — le crawl continue")
+                        break  # Break inner loop, will be re-processed in web mode
 
                     # Skip channels below min_subscribers (except seeds at depth 0)
                     if (self.min_subscribers > 0 and info and depth > 0
@@ -509,6 +535,64 @@ class Crawler:
                         len(q) for d, q in depth_queues.items() if d > depth
                     )
                     self._notify()
+
+                # If we switched to Web, re-run remaining channels at this depth in web/parallel mode
+                if fallback_to_web:
+                    remaining = [u for u in channels_at_depth if u not in visited]
+                    if remaining:
+                        logger.info(f"Mode Web: {len(remaining)} chaînes restantes à la profondeur {depth}")
+                        for i in range(0, len(remaining), self.concurrency):
+                            if self._stop_requested:
+                                break
+                            batch = remaining[i:i + self.concurrency]
+                            batch = [u for u in batch if u not in visited]
+                            if not batch:
+                                continue
+
+                            for u in batch:
+                                visited.add(u)
+                            self.state.current_channel = batch if len(batch) > 1 else batch[0]
+                            self._notify()
+
+                            tasks = [self._scrape_one(u) for u in batch]
+                            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                            for result in results:
+                                if isinstance(result, Exception):
+                                    self.state.errors.append(str(result))
+                                    continue
+                                uname, info, links = result
+
+                                if (self.min_subscribers > 0 and info and depth > 0
+                                        and info.subscribers < self.min_subscribers):
+                                    self.state.channels_scraped += 1
+                                    continue
+
+                                if info:
+                                    self.graph.add_node(info)
+                                else:
+                                    self.graph.add_placeholder_node(uname)
+
+                                for link in links:
+                                    if link.target in self.blacklist:
+                                        continue
+                                    self.graph.add_placeholder_node(link.target)
+                                    self.graph.add_edge(link)
+
+                                    if depth + 1 <= max_depth and link.target not in visited:
+                                        next_depth = depth + 1
+                                        if next_depth not in depth_queues:
+                                            depth_queues[next_depth] = []
+                                        depth_queues[next_depth].append(link.target)
+
+                                self.state.channels_scraped += 1
+                            self.state.channels_total = len(visited) + sum(
+                                len(q) for d, q in depth_queues.items() if d > depth
+                            )
+                            self.state.channels_queued = sum(
+                                len(q) for d, q in depth_queues.items() if d > depth
+                            )
+                            self._notify()
 
             depth_elapsed = time.time() - depth_start
             logger.info(f"=== Depth {depth} completed in {depth_elapsed:.1f}s ===")

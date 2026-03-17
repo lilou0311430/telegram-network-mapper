@@ -31,6 +31,13 @@ from urllib.parse import urlparse
 import aiohttp
 from bs4 import BeautifulSoup
 
+# Custom exception for long Telegram rate limits
+class FloodWaitTooLong(Exception):
+    """Raised when Telegram requires a wait longer than we're willing to handle."""
+    def __init__(self, seconds: int):
+        self.seconds = seconds
+        super().__init__(f"Telegram rate limit: {seconds}s wait required (~{seconds // 3600}h{(seconds % 3600) // 60}m)")
+
 logger = logging.getLogger(__name__)
 
 # Use lxml if available (much faster), fallback to html.parser
@@ -752,14 +759,25 @@ class TelethonScraper:
         await self.close()
 
     async def _get_entity(self, username: str):
-        """Get entity with caching."""
+        """Get entity with caching and FloodWait handling."""
+        from telethon.errors import FloodWaitError
         if username not in self._entity_cache:
-            self._entity_cache[username] = await self.client.get_entity(username)
+            try:
+                self._entity_cache[username] = await self.client.get_entity(username)
+            except FloodWaitError as e:
+                if e.seconds <= 60:
+                    logger.warning(f"FloodWait {e.seconds}s for {username} — waiting...")
+                    await asyncio.sleep(e.seconds)
+                    self._entity_cache[username] = await self.client.get_entity(username)
+                else:
+                    logger.error(f"FloodWait {e.seconds}s (~{e.seconds // 3600}h) — too long, switching to Web")
+                    raise FloodWaitTooLong(e.seconds)
         return self._entity_cache[username]
 
     async def get_channel_info(self, username: str) -> Optional[ChannelInfo]:
         """Get channel info via Telethon API."""
         from telethon.tl.functions.channels import GetFullChannelRequest
+        from telethon.errors import FloodWaitError
         try:
             entity = await self._get_entity(username)
             full = await self.client(GetFullChannelRequest(entity))
@@ -773,6 +791,15 @@ class TelethonScraper:
                 peer_id=getattr(entity, 'id', 0) or 0,
                 scraped_at=datetime.utcnow().isoformat(),
             )
+        except FloodWaitTooLong:
+            raise  # Propagate to crawler for fallback
+        except FloodWaitError as e:
+            if e.seconds <= 60:
+                logger.warning(f"FloodWait {e.seconds}s for {username} info — waiting...")
+                await asyncio.sleep(e.seconds)
+                return await self.get_channel_info(username)  # Retry once
+            else:
+                raise FloodWaitTooLong(e.seconds)
         except Exception as e:
             logger.error(f"Telethon error getting info for {username}: {e}")
             return None
@@ -865,8 +892,19 @@ class TelethonScraper:
                     logger.debug(f"Error processing message {getattr(message, 'id', '?')} in {username}: {e}")
                     continue
 
+        except FloodWaitTooLong:
+            raise  # Propagate to crawler for fallback
         except Exception as e:
-            logger.error(f"Telethon error iterating messages for {username}: {e}")
+            from telethon.errors import FloodWaitError
+            if isinstance(e, FloodWaitError):
+                if e.seconds <= 60:
+                    logger.warning(f"FloodWait {e.seconds}s iterating {username} — waiting...")
+                    await asyncio.sleep(e.seconds)
+                    # Don't retry full iteration, just continue with what we have
+                else:
+                    raise FloodWaitTooLong(e.seconds)
+            else:
+                logger.error(f"Telethon error iterating messages for {username}: {e}")
 
         # Check description
         if info and info.description:

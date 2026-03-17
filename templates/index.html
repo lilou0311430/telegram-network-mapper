@@ -239,6 +239,7 @@
         }
 
         .crawl-log .error { color: var(--red); }
+        .crawl-log .warning { color: #f0a500; font-weight: bold; }
         .crawl-log .info { color: var(--cyan); }
 
         /* Node info panel */
@@ -1095,7 +1096,11 @@
         // Errors
         if (status.errors && status.errors.length > 0) {
             const last = status.errors[status.errors.length - 1];
-            addLog('error', last);
+            if (last.includes('Rate-limit') || last.includes('FloodWait') || last.includes('Basculement')) {
+                addLog('warning', '⚠️ ' + last);
+            } else {
+                addLog('error', last);
+            }
         }
     }
 
