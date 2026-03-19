@@ -21,6 +21,7 @@ from datetime import datetime
 from typing import Optional, Callable
 from xml.sax.saxutils import escape, quoteattr
 
+from cache import CrawlCache
 from scraper import WebScraper, TelethonScraper, ChannelInfo, ChannelLink, FloodWaitTooLong
 
 logger = logging.getLogger(__name__)
@@ -265,16 +266,22 @@ class Crawler:
                  concurrency: int = 5, api_id: int = None, api_hash: str = None,
                  phone: str = None, proxies: list = None,
                  max_age_days: int = 0, link_types: list = None,
-                 min_subscribers: int = 0, blacklist: list = None):
+                 min_subscribers: int = 0, blacklist: list = None,
+                 incremental: bool = False):
         self.method = method
         self.concurrency = concurrency
         self.min_subscribers = min_subscribers
         self.blacklist = set(blacklist or [])
+        self.incremental = incremental
         self.graph = NetworkGraph()
         self.state = CrawlState()
         self._stop_requested = False
         self._callbacks: list[Callable] = []
         self._start_time = None
+
+        # Persistent cache
+        self.cache = CrawlCache()
+        self._session_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 
         if method == "telethon":
             self.scraper = TelethonScraper(
@@ -289,6 +296,7 @@ class Crawler:
                 concurrency=concurrency,
                 proxies=proxies,
                 max_age_days=max_age_days, link_types=link_types,
+                cache=self.cache,
             )
 
     def on_update(self, callback: Callable):
@@ -328,6 +336,13 @@ class Crawler:
             logger.error(f"Error scraping {username}: {e}")
             return username, None, []
 
+    def _save_to_cache(self, info: Optional[ChannelInfo], links: list[ChannelLink]):
+        """Persist channel info and edges to SQLite cache."""
+        if info and info.scraped_at:
+            self.cache.save_channel_from_info(info, session_id=self._session_id)
+        for link in links:
+            self.cache.save_edge_from_link(link, session_id=self._session_id)
+
     def _sort_by_priority(self, channels: list[str]) -> list[str]:
         """Sort channels by subscriber count (popular first) for better network discovery."""
         return sorted(channels, key=lambda c: self.graph.get_node_subscribers(c), reverse=True)
@@ -363,6 +378,38 @@ class Crawler:
         visited = set()
         depth_queues: dict[int, list[str]] = {0: []}
 
+        # Incremental mode: load cached channels into graph and visited set
+        if self.incremental:
+            cached_channels = self.cache.get_cached_channels()
+            cached_edges = self.cache.get_cached_edges()
+            if cached_channels:
+                logger.info(f"Incremental mode: loading {len(cached_channels)} cached channels")
+                for username, row in cached_channels.items():
+                    info = ChannelInfo(
+                        username=username,
+                        title=row.get('title', ''),
+                        description=row.get('description', ''),
+                        subscribers=row.get('subscribers', 0),
+                        is_verified=bool(row.get('is_verified', 0)),
+                        peer_id=row.get('peer_id', 0),
+                        scraped_at=row.get('scraped_at', ''),
+                    )
+                    self.graph.add_node(info)
+                    visited.add(username)
+                for edge in cached_edges:
+                    link = ChannelLink(
+                        source=edge['source'],
+                        target=edge['target'],
+                        count=edge.get('count', 1),
+                        link_types=edge.get('link_type', '').split(',') if edge.get('link_type') else [],
+                        first_seen=edge.get('first_seen', ''),
+                        last_seen=edge.get('last_seen', ''),
+                    )
+                    self.graph.add_edge(link)
+                    self.graph.add_placeholder_node(edge['target'])
+                self.state.channels_scraped = len(cached_channels)
+                logger.info(f"Incremental: {len(cached_channels)} channels + {len(cached_edges)} edges loaded from cache")
+
         for channel in seed_channels:
             channel = channel.lower().strip().lstrip('@')
             if 't.me/' in channel:
@@ -370,7 +417,7 @@ class Crawler:
             if channel and channel not in visited:
                 depth_queues[0].append(channel)
 
-        self.state.channels_total = len(depth_queues[0])
+        self.state.channels_total = len(depth_queues[0]) + self.state.channels_scraped
         self._notify()
 
         # BFS by depth level
@@ -445,12 +492,14 @@ class Crawler:
                         else:
                             self.graph.add_placeholder_node(username)
 
+                        valid_links = []
                         for link in links:
                             # Don't queue blacklisted targets
                             if link.target in self.blacklist:
                                 continue
                             self.graph.add_placeholder_node(link.target)
                             self.graph.add_edge(link)
+                            valid_links.append(link)
 
                             if depth + 1 <= max_depth and link.target not in visited:
                                 next_depth = depth + 1
@@ -458,6 +507,8 @@ class Crawler:
                                     depth_queues[next_depth] = []
                                 depth_queues[next_depth].append(link.target)
 
+                        # Persist to SQLite
+                        self._save_to_cache(info, valid_links)
                         self.state.channels_scraped += 1
 
                     self.state.channels_total = len(visited) + sum(
@@ -490,13 +541,18 @@ class Crawler:
                         self._notify()
 
                         # Close Telethon and switch to Web scraper
+                        saved_max_messages = self.scraper.max_messages
+                        saved_delay = self.scraper.delay
+                        saved_link_types = self.scraper.link_types
+                        saved_max_age = getattr(self.scraper, 'max_age_days', 0)
                         if hasattr(self.scraper, 'close'):
                             await self.scraper.close()
                         self.scraper = WebScraper(
-                            max_messages=self.scraper.max_messages,
-                            delay=self.scraper.delay,
-                            link_types=self.scraper.link_types,
-                            max_age_days=getattr(self.scraper, 'max_age_days', 0),
+                            max_messages=saved_max_messages,
+                            delay=saved_delay,
+                            link_types=saved_link_types,
+                            max_age_days=saved_max_age,
+                            cache=self.cache,
                         )
                         self.method = "web"
                         fallback_to_web = True
@@ -518,11 +574,13 @@ class Crawler:
                     else:
                         self.graph.add_placeholder_node(username)
 
+                    valid_links = []
                     for link in links:
                         if link.target in self.blacklist:
                             continue
                         self.graph.add_placeholder_node(link.target)
                         self.graph.add_edge(link)
+                        valid_links.append(link)
 
                         if depth + 1 <= max_depth and link.target not in visited:
                             next_depth = depth + 1
@@ -530,6 +588,8 @@ class Crawler:
                                 depth_queues[next_depth] = []
                             depth_queues[next_depth].append(link.target)
 
+                    # Persist to SQLite
+                    self._save_to_cache(info, valid_links)
                     self.state.channels_scraped += 1
                     self.state.channels_total = len(visited) + sum(
                         len(q) for d, q in depth_queues.items() if d > depth
@@ -539,8 +599,8 @@ class Crawler:
                 # If we switched to Web, re-run remaining channels at this depth in web/parallel mode
                 if fallback_to_web:
                     remaining = [u for u in channels_at_depth if u not in visited]
+                    logger.info(f"Fallback Web: {len(remaining)} chaînes non visitées sur {len(channels_at_depth)} à profondeur {depth}")
                     if remaining:
-                        logger.info(f"Mode Web: {len(remaining)} chaînes restantes à la profondeur {depth}")
                         for i in range(0, len(remaining), self.concurrency):
                             if self._stop_requested:
                                 break
@@ -573,11 +633,13 @@ class Crawler:
                                 else:
                                     self.graph.add_placeholder_node(uname)
 
+                                fb_valid_links = []
                                 for link in links:
                                     if link.target in self.blacklist:
                                         continue
                                     self.graph.add_placeholder_node(link.target)
                                     self.graph.add_edge(link)
+                                    fb_valid_links.append(link)
 
                                     if depth + 1 <= max_depth and link.target not in visited:
                                         next_depth = depth + 1
@@ -585,6 +647,8 @@ class Crawler:
                                             depth_queues[next_depth] = []
                                         depth_queues[next_depth].append(link.target)
 
+                                # Persist to SQLite
+                                self._save_to_cache(info, fb_valid_links)
                                 self.state.channels_scraped += 1
                             self.state.channels_total = len(visited) + sum(
                                 len(q) for d, q in depth_queues.items() if d > depth

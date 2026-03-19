@@ -13,6 +13,7 @@ from datetime import datetime
 from flask import Flask, render_template, request, jsonify, Response
 from flask_cors import CORS
 
+from cache import CrawlCache
 from crawler import Crawler, NetworkGraph
 
 try:
@@ -128,6 +129,9 @@ def start_crawl():
     # Link types filter
     link_types = data.get('link_types', ['forward', 'mention', 'link', 'description'])
 
+    # Incremental crawl
+    incremental = bool(data.get('incremental', False))
+
     if method not in ('web', 'telethon'):
         return jsonify({"error": "method must be 'web' or 'telethon'"}), 400
 
@@ -157,6 +161,7 @@ def start_crawl():
         "link_types": link_types,
         "min_subscribers": min_subscribers,
         "blacklist": blacklist,
+        "incremental": incremental,
     }
 
     if method == "telethon":
@@ -261,6 +266,37 @@ def export_json():
         mimetype='application/json',
         headers={'Content-Disposition': 'attachment; filename=telegram_network.json'}
     )
+
+
+# ──────────────────────────────────────────────
+# Routes - Cache API
+# ──────────────────────────────────────────────
+
+@app.route('/api/cache/stats')
+def cache_stats():
+    """Get cache statistics."""
+    cache = CrawlCache()
+    stats = cache.stats()
+    cache.close()
+    return jsonify(stats)
+
+
+@app.route('/api/cache/sessions')
+def cache_sessions():
+    """List crawl sessions stored in cache."""
+    cache = CrawlCache()
+    sessions = cache.get_sessions()
+    cache.close()
+    return jsonify(sessions)
+
+
+@app.route('/api/cache/clear', methods=['POST'])
+def clear_cache():
+    """Clear all cached data."""
+    cache = CrawlCache()
+    cache.clear_all()
+    cache.close()
+    return jsonify({"status": "cleared"})
 
 
 if __name__ == '__main__':

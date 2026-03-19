@@ -22,7 +22,9 @@ import logging
 import hashlib
 import json
 import os
+import random
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
@@ -75,6 +77,72 @@ IGNORE_LIST = {
     'username', 'privacy', 'tos', 'settings', 'channel',
     'group', 'c', 's', 'iv', 'web', 'dl', 'cdn',
 }
+
+# Realistic User-Agent strings for rotation
+_USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0',
+    'Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:132.0) Gecko/20100101 Firefox/132.0',
+    'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+]
+
+
+class TelethonRateTracker:
+    """Track Telethon API request rate to proactively avoid FloodWait."""
+
+    def __init__(self, window_sec: int = 60, soft_limit: int = 25, hard_limit: int = 35):
+        self.window_sec = window_sec
+        self.soft_limit = soft_limit
+        self.hard_limit = hard_limit
+        self._timestamps: deque = deque()
+        self._total_requests = 0
+
+    def _prune(self):
+        cutoff = time.time() - self.window_sec
+        while self._timestamps and self._timestamps[0] < cutoff:
+            self._timestamps.popleft()
+
+    @property
+    def requests_in_window(self) -> int:
+        self._prune()
+        return len(self._timestamps)
+
+    @property
+    def total_requests(self) -> int:
+        return self._total_requests
+
+    def record(self):
+        self._timestamps.append(time.time())
+        self._total_requests += 1
+
+    async def throttle(self):
+        """Wait if approaching rate limit. Call before each get_entity()."""
+        self._prune()
+        count = len(self._timestamps)
+
+        if count >= self.hard_limit:
+            wait = 30.0
+            logger.warning(f"Rate tracker: {count}/{self.hard_limit} requests/min — hard pause {wait}s")
+            await asyncio.sleep(wait)
+        elif count >= self.soft_limit:
+            # Progressive delay: 1s at soft_limit, up to 8s approaching hard
+            ratio = (count - self.soft_limit) / max(1, self.hard_limit - self.soft_limit)
+            wait = 1.0 + ratio * 7.0
+            logger.info(f"Rate tracker: {count}/{self.hard_limit} requests/min — throttling {wait:.1f}s")
+            await asyncio.sleep(wait)
+
+        self.record()
 
 
 @dataclass
@@ -276,7 +344,7 @@ class WebScraper:
     def __init__(self, max_messages: int = 100, delay: float = 0.8,
                  concurrency: int = 5, use_cache: bool = True, cache_ttl: int = 3600,
                  max_retries: int = 3, proxies: list = None,
-                 max_age_days: int = 0, link_types: list = None):
+                 max_age_days: int = 0, link_types: list = None, cache=None):
         # Validation
         if max_messages < 1 or max_messages > 5000:
             raise ValueError("max_messages must be between 1 and 5000")
@@ -293,7 +361,13 @@ class WebScraper:
         self.max_age_days = max_age_days
         self.link_types = link_types or ['forward', 'mention', 'link', 'description']
         self.session: Optional[aiohttp.ClientSession] = None
-        self.cache = PageCache(ttl=cache_ttl) if use_cache else None
+        # Use provided cache (CrawlCache) or fall back to PageCache
+        if cache is not None:
+            self.cache = cache
+        elif use_cache:
+            self.cache = PageCache(ttl=cache_ttl)
+        else:
+            self.cache = None
         # Adaptive delay tracking
         self._error_count = 0
         self._success_count = 0
@@ -311,6 +385,10 @@ class WebScraper:
         self._proxy_index += 1
         return proxy
 
+    @staticmethod
+    def _random_ua() -> str:
+        return random.choice(_USER_AGENTS)
+
     async def _ensure_session(self):
         if self.session is None or self.session.closed:
             connector = aiohttp.TCPConnector(
@@ -321,9 +399,6 @@ class WebScraper:
             self.session = aiohttp.ClientSession(
                 connector=connector,
                 headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                                  'AppleWebKit/537.36 (KHTML, like Gecko) '
-                                  'Chrome/131.0.0.0 Safari/537.36',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     'Accept-Language': 'en-US,en;q=0.9',
                 },
@@ -351,7 +426,7 @@ class WebScraper:
         """Fetch HTML with caching, retry, rate limiting, and error handling."""
         # Check cache first
         if self.cache:
-            cached = self.cache.get(url)
+            cached = self.cache.get_page(url) if hasattr(self.cache, 'get_page') else self.cache.get(url)
             if cached:
                 return cached
 
@@ -361,11 +436,13 @@ class WebScraper:
             for attempt in range(self.max_retries):
                 try:
                     proxy = self._get_proxy()
+                    headers = {'User-Agent': self._random_ua()}
                     async with self.session.get(
                         url,
                         timeout=aiohttp.ClientTimeout(total=12),
                         allow_redirects=True,
                         proxy=proxy,
+                        headers=headers,
                     ) as resp:
                         if resp.status == 429:  # Rate limited
                             retry_after = int(resp.headers.get('Retry-After', 5))
@@ -391,7 +468,10 @@ class WebScraper:
 
                         # Cache the result
                         if self.cache:
-                            self.cache.set(url, html)
+                            if hasattr(self.cache, 'set_page'):
+                                self.cache.set_page(url, html)
+                            else:
+                                self.cache.set(url, html)
 
                         return html
 
@@ -703,8 +783,9 @@ class WebScraper:
         elapsed = time.time() - start_time
         logger.info(f"[{username}] scraped in {elapsed:.1f}s — {len(filtered_links)} links found (filtered from {len(link_map)})")
 
-        # Adaptive delay
-        await asyncio.sleep(self.current_delay)
+        # Adaptive delay with jitter (±30%)
+        jittered = self.current_delay * random.uniform(0.7, 1.4)
+        await asyncio.sleep(jittered)
 
         return info, list(filtered_links.values())
 
@@ -734,6 +815,8 @@ class TelethonScraper:
         self.client = None
         # Entity cache (avoids repeated get_entity calls)
         self._entity_cache: dict = {}
+        # Rate limit tracker
+        self.rate_tracker = TelethonRateTracker()
 
     async def connect(self):
         """Initialize and connect the Telethon client using existing session."""
@@ -759,9 +842,10 @@ class TelethonScraper:
         await self.close()
 
     async def _get_entity(self, username: str):
-        """Get entity with caching and FloodWait handling."""
+        """Get entity with caching, rate tracking, and FloodWait handling."""
         from telethon.errors import FloodWaitError
         if username not in self._entity_cache:
+            await self.rate_tracker.throttle()
             try:
                 self._entity_cache[username] = await self.client.get_entity(username)
             except FloodWaitError as e:
@@ -924,7 +1008,8 @@ class TelethonScraper:
                 filtered_links[target] = link
 
         elapsed = time.time() - start_time
-        logger.info(f"[{username}] Telethon scraped in {elapsed:.1f}s — {len(filtered_links)} links found (filtered from {len(link_map)})")
+        logger.info(f"[{username}] Telethon scraped in {elapsed:.1f}s — {len(filtered_links)} links found (filtered from {len(link_map)}) [rate: {self.rate_tracker.requests_in_window} req/min]")
 
-        await asyncio.sleep(self.delay)
+        jittered = self.delay * random.uniform(0.7, 1.4)
+        await asyncio.sleep(jittered)
         return info, list(filtered_links.values())

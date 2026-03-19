@@ -608,6 +608,15 @@
                     </label>
                 </div>
 
+                <div style="margin-top: 10px; display: flex; align-items: center; gap: 8px;">
+                    <label style="display: flex; align-items: center; gap: 4px; margin: 0; cursor: pointer;">
+                        <input type="checkbox" id="incremental" checked>
+                        Crawl incremental <span class="help-tip">?<span class="help-text">Reprend depuis le cache SQLite — les chaines deja scrapees ne sont pas re-telechargees. Decocher pour tout re-scraper.</span></span>
+                    </label>
+                    <span id="cache-count" style="font-size: 10px; color: var(--text-dim);"></span>
+                </div>
+                <button class="btn btn-small" onclick="clearCache()" style="margin-top: 6px; font-size: 10px;">Vider le cache</button>
+
                 <label>Methode <span class="help-tip">?<span class="help-text">Web scraping : pas besoin de compte, mais limite aux chaines publiques. Telethon API : necessite un compte Telegram, mais plus complet et fiable.</span></span></label>
                 <select id="method" onchange="toggleTelethon()">
                     <option value="web">Web scraping (sans compte)</option>
@@ -726,6 +735,7 @@
     let showLabels = true;
     let pollInterval = null;
     let svg, g, linkGroup, nodeGroup, zoom;
+    let lastLoggedError = '';
 
     // ─── Init ────────────────────────────────────────────
     function initGraph() {
@@ -1009,6 +1019,7 @@
                 ? parseInt(document.getElementById('min-subscribers').value) : 0,
             blacklist: blacklist,
             link_types: linkTypes,
+            incremental: document.getElementById('incremental').checked,
         };
 
         if (body.method === 'telethon') {
@@ -1093,13 +1104,16 @@
             document.getElementById('progress-fill').style.width = pct + '%';
         }
 
-        // Errors
+        // Errors (deduplicate — only log new messages)
         if (status.errors && status.errors.length > 0) {
             const last = status.errors[status.errors.length - 1];
-            if (last.includes('Rate-limit') || last.includes('FloodWait') || last.includes('Basculement')) {
-                addLog('warning', '⚠️ ' + last);
-            } else {
-                addLog('error', last);
+            if (last !== lastLoggedError) {
+                lastLoggedError = last;
+                if (last.includes('Rate-limit') || last.includes('FloodWait') || last.includes('Basculement')) {
+                    addLog('warning', '⚠️ ' + last);
+                } else {
+                    addLog('error', last);
+                }
             }
         }
     }
@@ -1127,9 +1141,34 @@
         } catch (e) {}
     }
 
+    async function loadCacheStats() {
+        try {
+            const resp = await fetch('/api/cache/stats');
+            const stats = await resp.json();
+            const el = document.getElementById('cache-count');
+            if (stats.channels_scraped > 0) {
+                el.textContent = `(${stats.channels_scraped} chaines en cache)`;
+            } else {
+                el.textContent = '(cache vide)';
+            }
+        } catch (e) {}
+    }
+
+    async function clearCache() {
+        if (!confirm('Vider tout le cache ? Les prochains crawls repartiront de zero.')) return;
+        try {
+            await fetch('/api/cache/clear', { method: 'POST' });
+            loadCacheStats();
+            addLog('info', 'Cache vide');
+        } catch (e) {
+            alert('Erreur: ' + e.message);
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         initGraph();
         loadConfig();
+        loadCacheStats();
     });
     </script>
 </body>
