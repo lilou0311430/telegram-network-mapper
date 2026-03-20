@@ -140,16 +140,16 @@ class NetworkGraph:
             '  </meta>',
             '  <graph defaultedgetype="directed" mode="static">',
             '    <attributes class="node" mode="static">',
-            '      <attribute id="0" title="title" type="string"/>',
-            '      <attribute id="1" title="subscribers" type="integer"/>',
-            '      <attribute id="2" title="description" type="string"/>',
-            '      <attribute id="3" title="is_verified" type="boolean"/>',
-            '      <attribute id="4" title="scraped" type="boolean"/>',
-            '      <attribute id="5" title="peer_id" type="long"/>',
+            '      <attribute id="n0" title="title" type="string"/>',
+            '      <attribute id="n1" title="subscribers" type="integer"/>',
+            '      <attribute id="n2" title="description" type="string"/>',
+            '      <attribute id="n3" title="is_verified" type="boolean"/>',
+            '      <attribute id="n4" title="scraped" type="boolean"/>',
+            '      <attribute id="n5" title="peer_id" type="long"/>',
             '    </attributes>',
             '    <attributes class="edge" mode="static">',
-            '      <attribute id="0" title="weight" type="integer"/>',
-            '      <attribute id="1" title="link_types" type="string"/>',
+            '      <attribute id="e0" title="weight" type="integer"/>',
+            '      <attribute id="e1" title="link_types" type="string"/>',
             '    </attributes>',
             '    <nodes>',
         ]
@@ -160,12 +160,12 @@ class NetworkGraph:
             desc = quoteattr((info.description or '')[:200])
             lines.append(f'      <node id={safe_id} label={label}>')
             lines.append(f'        <attvalues>')
-            lines.append(f'          <attvalue for="0" value={label}/>')
-            lines.append(f'          <attvalue for="1" value="{int(info.subscribers or 0)}"/>')
-            lines.append(f'          <attvalue for="2" value={desc}/>')
-            lines.append(f'          <attvalue for="3" value="{str(info.is_verified).lower()}"/>')
-            lines.append(f'          <attvalue for="4" value="{str(info.scraped_at is not None).lower()}"/>')
-            lines.append(f'          <attvalue for="5" value="{info.peer_id}"/>')
+            lines.append(f'          <attvalue for="n0" value={label}/>')
+            lines.append(f'          <attvalue for="n1" value="{int(info.subscribers or 0)}"/>')
+            lines.append(f'          <attvalue for="n2" value={desc}/>')
+            lines.append(f'          <attvalue for="n3" value="{str(info.is_verified).lower()}"/>')
+            lines.append(f'          <attvalue for="n4" value="{str(info.scraped_at is not None).lower()}"/>')
+            lines.append(f'          <attvalue for="n5" value="{info.peer_id}"/>')
             lines.append(f'        </attvalues>')
             lines.append(f'      </node>')
 
@@ -178,8 +178,8 @@ class NetworkGraph:
             tgt = quoteattr(link.target)
             lines.append(f'      <edge id="{i}" source={src} target={tgt}>')
             lines.append(f'        <attvalues>')
-            lines.append(f'          <attvalue for="0" value="{link.count}"/>')
-            lines.append(f'          <attvalue for="1" value="{types}"/>')
+            lines.append(f'          <attvalue for="e0" value="{link.count}"/>')
+            lines.append(f'          <attvalue for="e1" value="{types}"/>')
             lines.append(f'        </attvalues>')
             lines.append(f'      </edge>')
 
